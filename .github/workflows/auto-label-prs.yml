@@ -1,0 +1,88 @@
+name: Auto Label PRs
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    name: Auto Label PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label PR by file type
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const files = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100
+            });
+
+            const labels = new Set();
+
+            for (const file of files.data) {
+              const name = file.filename.toLowerCase();
+
+              // Language labels
+              if (name.endsWith('.py')) labels.add('python');
+              if (name.endsWith('.js') || name.endsWith('.ts')) labels.add('javascript');
+              if (name.endsWith('.md') || name.endsWith('.txt')) labels.add('documentation');
+              if (name.endsWith('.yml') || name.endsWith('.yaml')) labels.add('ci/cd');
+              if (name.endsWith('.json')) labels.add('config');
+              if (name.endsWith('.html') || name.endsWith('.css')) labels.add('frontend');
+
+              // Area labels
+              if (name.startsWith('demo/')) labels.add('demo');
+              if (name.startsWith('real/')) labels.add('production');
+              if (name.startsWith('change-log/')) labels.add('changelog');
+              if (name.startsWith('.github/')) labels.add('github');
+              if (name.includes('test') || name.includes('spec')) labels.add('tests');
+              if (name.includes('readme')) labels.add('documentation');
+              if (name.includes('bot') || name.includes('trade')) labels.add('trading');
+
+              // Size labels
+              if (file.additions > 500 || file.deletions > 500) labels.add('size/large');
+              else if (file.additions > 100 || file.deletions > 100) labels.add('size/medium');
+              else labels.add('size/small');
+            }
+
+            // PR title labels
+            const title = pr.title.toLowerCase();
+            if (title.includes('fix') || title.includes('bug')) labels.add('bug');
+            if (title.includes('feat') || title.includes('add')) labels.add('enhancement');
+            if (title.includes('docs') || title.includes('readme')) labels.add('documentation');
+            if (title.includes('refactor') || title.includes('clean')) labels.add('refactor');
+            if (title.includes('security') || title.includes('vuln')) labels.add('security');
+            if (title.includes('chore') || title.includes('ci') || title.includes('workflow')) labels.add('maintenance');
+            if (title.includes('perf') || title.includes('speed')) labels.add('performance');
+            if (title.includes('typo') || title.includes('spell')) labels.add('typo');
+
+            // New file = new feature
+            const addedFiles = files.data.filter(f => f.status === 'added');
+            if (addedFiles.length > 0) labels.add('new-feature');
+
+            // Deleted files
+            const deletedFiles = files.data.filter(f => f.status === 'removed');
+            if (deletedFiles.length > 0) labels.add('cleanup');
+
+            // Apply labels
+            if (labels.size > 0) {
+              try {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  labels: Array.from(labels)
+                });
+                console.log(`Applied labels: ${Array.from(labels).join(', ')}`);
+              } catch (e) {
+                console.log(`Label error: ${e.message}`);
+              }
+            }

@@ -1,0 +1,117 @@
+name: Auto Assign Reviewers
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  assign:
+    name: Auto Assign Reviewers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign reviewers
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const author = pr.user.login;
+
+            // Default reviewers (repo collaborators)
+            let reviewers = [];
+            let teamReviewers = [];
+
+            try {
+              const collaborators = await github.rest.repos.listCollaborators({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 50
+              });
+
+              reviewers = collaborators.data
+                .map(c => c.login)
+                .filter(login => login !== author && login !== 'github-actions[bot]')
+                .slice(0, 3); // Max 3 reviewers
+
+              console.log(`Found reviewers: ${reviewers.join(', ')}`);
+            } catch (e) {
+              console.log(`Could not list collaborators: ${e.message}`);
+            }
+
+            // Auto-assign based on file changes
+            const files = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100
+            });
+
+            const areas = {
+              demo: [],
+              real: [],
+              workflow: [],
+              docs: []
+            };
+
+            for (const file of files.data) {
+              const path = file.filename.toLowerCase();
+              if (path.startsWith('demo/')) areas.demo.push(file.filename);
+              if (path.startsWith('real/')) areas.real.push(file.filename);
+              if (path.startsWith('.github/')) areas.workflow.push(file.filename);
+              if (path.includes('readme') || path.endsWith('.md')) areas.docs.push(file.filename);
+            }
+
+            console.log(`Changed areas: ${JSON.stringify(areas)}`);
+
+            // Add reviewers
+            if (reviewers.length > 0) {
+              try {
+                await github.rest.pulls.requestReviewers({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: pr.number,
+                  reviewers: reviewers
+                });
+                console.log(`Assigned reviewers: ${reviewers.join(', ')}`);
+              } catch (e) {
+                console.log(`Review assignment error: ${e.message}`);
+              }
+            }
+
+            // Add label based on area
+            const labels = [];
+            if (areas.demo.length > 0) labels.push('needs-demo-review');
+            if (areas.real.length > 0) labels.push('needs-production-review');
+            if (areas.workflow.length > 0) labels.push('needs-ci-review');
+
+            if (labels.length > 0) {
+              try {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  labels: labels
+                });
+              } catch (e) {
+                console.log(`Label error: ${e.message}`);
+              }
+            }
+
+            // Comment with area summary
+            const summary = [];
+            if (areas.demo.length > 0) summary.push(`**Demo:** ${areas.demo.length} file(s)`);
+            if (areas.real.length > 0) summary.push(`**Production:** ${areas.real.length} file(s)`);
+            if (areas.workflow.length > 0) summary.push(`**CI/CD:** ${areas.workflow.length} file(s)`);
+            if (areas.docs.length > 0) summary.push(`**Docs:** ${areas.docs.length} file(s)`);
+
+            if (summary.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body: `## Review Areas\n\n${summary.join('\n')}\n\n_${reviewers.length > 0 ? 'Reviewers auto-assigned.' : 'No collaborators found for auto-assignment.'}_`
+              });
+            }

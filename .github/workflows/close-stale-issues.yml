@@ -1,0 +1,82 @@
+name: Close Stale Issues
+
+on:
+  schedule:
+    - cron: '30 2 * * 1'  # Every Monday at 2:30 AM
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Days before closing'
+        required: false
+        default: '30'
+      label:
+        description: 'Label to check'
+        required: false
+        default: 'stale'
+
+permissions:
+  issues: write
+
+jobs:
+  close-stale:
+    name: Auto-Close Stale Issues
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close stale issues
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const days = parseInt('${{ github.event.inputs.days || 30 }}');
+            const label = '${{ github.event.inputs.label || stale }}';
+            const cutoff = new Date();
+            cutoff.setDate(cutoff.getDate() - days);
+
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: label,
+              per_page: 100
+            });
+
+            let closed = 0;
+            for (const issue of issues.data) {
+              const updatedAt = new Date(issue.updated_at);
+              if (updatedAt < cutoff) {
+                // Check if there's recent activity
+                const comments = await github.rest.issues.listComments({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  per_page: 5,
+                  direction: 'desc'
+                });
+
+                const lastComment = comments.data[0];
+                const lastActivity = lastComment
+                  ? new Date(lastComment.created_at)
+                  : updatedAt;
+
+                if (lastActivity < cutoff) {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    body: `Closing this issue as it has been inactive for more than ${days} days. Feel free to reopen if still relevant.`
+                  });
+
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    state: 'closed',
+                    state_reason: 'not_planned'
+                  });
+
+                  closed++;
+                  console.log(`Closed issue #${issue.number}: ${issue.title}`);
+                }
+              }
+            }
+
+            console.log(`\nTotal closed: ${closed}`);

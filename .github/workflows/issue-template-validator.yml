@@ -1,0 +1,120 @@
+name: Issue Template Validator
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  issues: write
+
+jobs:
+  validate:
+    name: Validate Issue
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate issue content
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const body = issue.body || '';
+            const title = issue.title || '';
+
+            const errors = [];
+            const warnings = [];
+
+            // Title checks
+            if (title.length < 5) {
+              errors.push('Title is too short (minimum 5 characters)');
+            }
+            if (title.length > 100) {
+              errors.push('Title is too long (maximum 100 characters)');
+            }
+
+            // Body checks
+            if (body.length < 20) {
+              errors.push('Issue body is too short (minimum 20 characters)');
+            }
+
+            // Check for required sections
+            const requiredSections = ['Description', 'Steps', 'Expected', 'Actual'];
+            const hasSections = (section) => {
+              const regex = new RegExp(`#+\\s*${section}`, 'i');
+              return regex.test(body);
+            };
+
+            for (const section of requiredSections) {
+              if (!hasSections(section)) {
+                warnings.push(`Missing recommended section: **${section}**`);
+              }
+            }
+
+            // Check for code blocks
+            if (body.includes('```') && !body.includes('```python') && !body.includes('```js') && !body.includes('```bash')) {
+              warnings.push('Consider adding language to code blocks (e.g., ```python)');
+            }
+
+            // Check for screenshots/images
+            if (!body.includes('![') && !body.includes('image') && !body.includes('screenshot')) {
+              warnings.push('Consider adding screenshots if applicable');
+            }
+
+            // Check for duplicates mention
+            if (body.toLowerCase().includes('duplicate') || body.toLowerCase().includes('already exists')) {
+              warnings.push('This issue might be a duplicate. Please check existing issues.');
+            }
+
+            // Spam detection
+            const spamPatterns = [
+              /https?:\/\/[^\s]+\.(ru|cn|tk|ml|ga|cf)\b/i,
+              /\b(buy|sell|cheap|discount|offer|viagra|casino|crypto.?invest)\b/i,
+              /@[\w.-]+\.(com|net|org|ru)/i
+            ];
+
+            for (const pattern of spamPatterns) {
+              if (pattern.test(body) || pattern.test(title)) {
+                errors.push('This issue appears to be spam');
+                break;
+              }
+            }
+
+            // Create comment
+            let comment = '';
+            if (errors.length > 0) {
+              comment += `## ❌ Issues Found\n\n`;
+              errors.forEach(e => comment += `- ${e}\n`);
+              comment += `\nPlease fix these issues and re-edit your issue.`;
+            }
+
+            if (warnings.length > 0) {
+              comment += `\n## ⚠️ Suggestions\n\n`;
+              warnings.forEach(w => comment += `- ${w}\n`);
+            }
+
+            if (comment) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: comment
+              });
+
+              // Add label for invalid issues
+              if (errors.length > 0) {
+                try {
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    labels: ['invalid']
+                  });
+                } catch (e) {
+                  console.log(`Label error: ${e.message}`);
+                }
+              }
+            }
+
+            console.log(`Errors: ${errors.length}, Warnings: ${warnings.length}`);

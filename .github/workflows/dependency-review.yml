@@ -1,0 +1,113 @@
+name: Dependency Review
+
+on:
+  pull_request:
+    branches: [main, master]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  dependency-review:
+    name: Review Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          deny-licenses: GPL-3.0, AGPL-3.0
+          comment-summary-in-pr: always
+
+      - name: Check for outdated dependencies
+        run: |
+          echo "=== Checking for dependency files ==="
+
+          if [ -f "requirements.txt" ]; then
+            echo "--- requirements.txt found ---"
+            cat requirements.txt
+            echo ""
+            echo "To check for updates:"
+            echo "  pip install --upgrade pip"
+            echo "  pip list --outdated"
+          fi
+
+          if [ -f "package.json" ]; then
+            echo "--- package.json found ---"
+            cat package.json | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          deps = data.get('dependencies', {})
+          dev = data.get('devDependencies', {})
+          print('Dependencies:')
+          for k, v in deps.items():
+              print(f'  {k}: {v}')
+          print('Dev Dependencies:')
+          for k, v in dev.items():
+              print(f'  {k}: {v}')
+          " 2>/dev/null || cat package.json
+          fi
+
+          if [ -f "Pipfile" ]; then
+            echo "--- Pipfile found ---"
+            cat Pipfile
+          fi
+
+          if [ -f "pyproject.toml" ]; then
+            echo "--- pyproject.toml found ---"
+            cat pyproject.toml
+          fi
+
+      - name: License check
+        run: |
+          echo "=== Checking licenses ==="
+          if command -v pip &> /dev/null; then
+            pip install pip-licenses 2>/dev/null || true
+            pip-licenses --format=json --output-file=licenses.json 2>/dev/null || true
+
+            if [ -f licenses.json ]; then
+              python3 -c "
+          import json
+          with open('licenses.json') as f:
+              data = json.load(f)
+
+          restricted = ['GPL-3.0', 'AGPL-3.0', 'SSPL-1.0']
+          found = [d for d in data if d.get('License') in restricted]
+
+          if found:
+              print('⚠️  Restricted licenses found:')
+              for d in found:
+                  print(f\"  {d['Name']}: {d['License']}\")
+          else:
+              print('No restricted licenses found.')
+          " 2>/dev/null || echo "License check skipped"
+            fi
+          fi
+
+      - name: Security audit
+        run: |
+          echo "=== Security audit ==="
+
+          if [ -f "requirements.txt" ]; then
+            pip install safety 2>/dev/null || true
+            safety check -r requirements.txt --output json > safety-report.json 2>/dev/null || true
+
+            if [ -f safety-report.json ]; then
+              python3 -c "
+          import json
+          with open('safety-report.json') as f:
+              data = json.load(f)
+          if data.get('vulnerabilities'):
+              print('Vulnerabilities found:')
+              for v in data['vulnerabilities']:
+                  print(f\"  {v.get('package')}: {v.get('advisory')}\")
+          else:
+              print('No known vulnerabilities found.')
+          " 2>/dev/null || echo "Safety check skipped"
+            fi
+          fi

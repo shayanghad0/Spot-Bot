@@ -1,0 +1,90 @@
+name: Commit Lint Check
+
+on:
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  commit-lint:
+    name: Validate Commit Messages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install commitlint
+        run: |
+          npm install --save-dev @commitlint/cli @commitlint/config-conventional
+
+      - name: Create commitlint config
+        run: |
+          cat > commitlint.config.js << 'EOF'
+          module.exports = {
+            extends: ['@commitlint/config-conventional'],
+            rules: {
+              'type-enum': [2, 'always', [
+                'feat', 'fix', 'docs', 'style', 'refactor',
+                'perf', 'test', 'build', 'ci', 'chore', 'revert'
+              ]],
+              'subject-case': [2, 'never', ['start-case', 'pascal-case', 'upper-case']],
+              'subject-empty': [2, 'never'],
+              'subject-max-length': [2, 'always', 72],
+              'header-max-length': [2, 'always', 100],
+              'body-leading-blank': [1, 'always'],
+              'body-max-line-length': [2, 'always', 120],
+            }
+          };
+          EOF
+
+      - name: Validate PR commits
+        run: |
+          echo "=== Validating commit messages ==="
+          COMMITS=$(git log origin/main..HEAD --pretty=format:"%H" 2>/dev/null || git log --pretty=format:"%H" -5)
+
+          FAILED=0
+          for SHA in $COMMITS; do
+            MSG=$(git log -1 --pretty=format:"%s" $SHA)
+            BODY=$(git log -1 --pretty=format:"%b" $SHA)
+            FULL_MSG="${MSG}%0A%0A${BODY}"
+
+            # Check conventional commit format
+            if echo "$MSG" | grep -qE "^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?(!)?: .+"; then
+              echo "OK: $MSG"
+            else
+              echo "FAIL: $MSG"
+              echo "  Expected: type(scope): description"
+              echo "  Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+              FAILED=1
+            fi
+
+            # Check subject length
+            SUBJECT_LEN=${#MSG}
+            if [ "$SUBJECT_LEN" -gt 100 ]; then
+              echo "  TOO LONG: $SUBJECT_LEN chars (max 100)"
+              FAILED=1
+            fi
+          done
+
+          if [ "$FAILED" -eq 1 ]; then
+            echo ""
+            echo "=== Commit lint failed ==="
+            echo "Please use conventional commit format:"
+            echo "  feat: add new feature"
+            echo "  fix: resolve bug"
+            echo "  docs: update documentation"
+            exit 1
+          fi
+
+          echo ""
+          echo "All commits follow conventional format!"

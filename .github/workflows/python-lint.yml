@@ -1,0 +1,69 @@
+name: Python Lint & Format
+
+on:
+  pull_request:
+    branches: [main, master]
+    paths: ['**.py']
+  push:
+    branches: [main, master]
+    paths: ['**.py']
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  lint:
+    name: Lint & Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tools
+        run: pip install flake8 black isort mypy pylint
+
+      - name: Black format check
+        run: |
+          echo "=== Checking code formatting with Black ==="
+          black --check --diff . 2>&1 || true
+
+      - name: isort import check
+        run: |
+          echo "=== Checking import order with isort ==="
+          isort --check-only --diff . 2>&1 || true
+
+      - name: Flake8 lint
+        run: |
+          echo "=== Linting with Flake8 ==="
+          flake8 . \
+            --max-line-length=120 \
+            --max-complexity=10 \
+            --statistics \
+            --count \
+            --show-source \
+            --exclude=.git,__pycache__,node_modules,dist,build,Change-log \
+            --ignore=E501,W503,E402 \
+            2>&1 || true
+
+      - name: Pylint check
+        run: |
+          echo "=== Pylint analysis ==="
+          find . -name "*.py" -not -path "./.git/*" -not -path "./__pycache__/*" | \
+            xargs pylint --disable=C0114,C0115,C0116,R0903,W0611,E0401 \
+            --max-line-length=120 \
+            2>&1 | tail -50 || true
+
+      - name: Summary
+        if: always()
+        run: |
+          echo ""
+          echo "============================================"
+          echo "  PYTHON LINT COMPLETE"
+          echo "============================================"
+          echo "Tools: Black, isort, Flake8, Pylint"
